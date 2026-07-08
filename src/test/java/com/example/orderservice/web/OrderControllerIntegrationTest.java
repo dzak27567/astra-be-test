@@ -2,6 +2,7 @@ package com.example.orderservice.web;
 
 import com.example.orderservice.domain.Order;
 import com.example.orderservice.domain.OrderItem;
+import com.example.orderservice.domain.OrderStatus;
 import com.example.orderservice.repository.OrderRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -234,5 +235,142 @@ class OrderControllerIntegrationTest {
         order.addItem(item);
 
         return orderRepository.save(order);
+    }
+
+    // ========== Part 2: Status Transitions ==========
+
+    @Test
+    void payOrder_fromCreated_returns200() throws Exception {
+        Order order = createTestOrder();
+
+        mockMvc.perform(post("/api/orders/" + order.getId() + "/pay"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("PAID"));
+    }
+
+    @Test
+    void shipOrder_fromPaid_returns200() throws Exception {
+        Order order = createTestOrder();
+        order.setStatus(OrderStatus.PAID);
+        orderRepository.save(order);
+
+        mockMvc.perform(post("/api/orders/" + order.getId() + "/ship"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("SHIPPED"));
+    }
+
+    @Test
+    void deliverOrder_fromShipped_returns200() throws Exception {
+        Order order = createTestOrder();
+        order.setStatus(OrderStatus.SHIPPED);
+        orderRepository.save(order);
+
+        mockMvc.perform(post("/api/orders/" + order.getId() + "/deliver"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("DELIVERED"));
+    }
+
+    @Test
+    void cancelOrder_withReason_returns200() throws Exception {
+        Order order = createTestOrder();
+
+        mockMvc.perform(post("/api/orders/" + order.getId() + "/cancel")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"reason\": \"Changed my mind\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("CANCELLED"))
+                .andExpect(jsonPath("$.cancelReason").value("Changed my mind"));
+    }
+
+    @Test
+    void cancelOrder_withoutReason_returns400() throws Exception {
+        Order order = createTestOrder();
+
+        mockMvc.perform(post("/api/orders/" + order.getId() + "/cancel")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"reason\": \"\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("VALIDATION_ERROR"));
+    }
+
+    @Test
+    void shipOrder_fromCreated_returns409() throws Exception {
+        Order order = createTestOrder();
+
+        mockMvc.perform(post("/api/orders/" + order.getId() + "/ship"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value("INVALID_STATE"));
+    }
+
+    @Test
+    void cancelOrder_fromDelivered_returns409() throws Exception {
+        Order order = createTestOrder();
+        order.setStatus(OrderStatus.DELIVERED);
+        orderRepository.save(order);
+
+        mockMvc.perform(post("/api/orders/" + order.getId() + "/cancel")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"reason\": \"Too late\"}"))
+                .andExpect(status().isConflict());
+    }
+
+    // ========== Part 2: Item Immutability After Payment ==========
+
+    @Test
+    void updateOrder_afterPaid_returns409() throws Exception {
+        Order order = createTestOrder();
+        order.setStatus(OrderStatus.PAID);
+        orderRepository.save(order);
+
+        String body = """
+                {
+                    "customerName": "New Name",
+                    "items": [{ "productName": "NewItem", "quantity": 1, "unitPrice": 5.00 }]
+                }
+                """;
+
+        mockMvc.perform(put("/api/orders/" + order.getId())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value("INVALID_STATE"));
+    }
+
+    // ========== Part 2: Full lifecycle ==========
+
+    @Test
+    void fullLifecycle_created_paid_shipped_delivered() throws Exception {
+        // Create
+        String createBody = """
+                {
+                    "customerName": "Lifecycle Test",
+                    "items": [{ "productName": "Book", "quantity": 1, "unitPrice": 15.00 }]
+                }
+                """;
+
+        String orderId = mockMvc.perform(post("/api/orders")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(createBody))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("CREATED"))
+                .andReturn().getResponse().getContentAsString();
+
+        // Extract orderId from JSON
+        String id = orderId.split("\"orderId\":\"")[1].split("\"")[0];
+
+        // Pay
+        mockMvc.perform(post("/api/orders/" + id + "/pay"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("PAID"));
+
+        // Ship
+        mockMvc.perform(post("/api/orders/" + id + "/ship"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("SHIPPED"));
+
+        // Deliver
+        mockMvc.perform(post("/api/orders/" + id + "/deliver"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("DELIVERED"));
     }
 }
