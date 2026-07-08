@@ -26,7 +26,21 @@ java -jar target/order-service-0.0.1-SNAPSHOT.jar
 ./mvnw test
 ```
 
-The service starts on `http://localhost:8080`. H2 Console is available at `/h2-console` (JDBC URL: `jdbc:h2:file:./data/orderdb`).
+The service starts on `http://localhost:8080`.
+
+### Manual Testing Options:
+
+1. **Swagger UI (Interactive Browser Console)**
+   - Start the service and open: [http://localhost:8080/swagger-ui/index.html](http://localhost:8080/swagger-ui/index.html)
+   - You can test and execute all endpoints directly from your browser.
+
+2. **Postman Collection**
+   - Import the file `Order_Service_Postman_Collection.json` located at the root of the project into Postman.
+   - Set the `order_id` collection variable after creating an order to test other routes easily.
+
+3. **H2 Database Console**
+   - Access: `/h2-console`
+   - JDBC URL: `jdbc:h2:file:./data/orderdb` (username: `sa`, password: empty)
 
 ## API Reference
 
