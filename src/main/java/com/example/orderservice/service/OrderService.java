@@ -2,13 +2,12 @@ package com.example.orderservice.service;
 
 import com.example.orderservice.domain.Order;
 import com.example.orderservice.domain.OrderItem;
+import com.example.orderservice.domain.OrderStatus;
+import com.example.orderservice.exception.InvalidOrderStateException;
 import com.example.orderservice.exception.OrderNotFoundException;
 import com.example.orderservice.repository.OrderRepository;
-import com.example.orderservice.web.dto.CreateOrderRequest;
-import com.example.orderservice.web.dto.OrderItemRequest;
-import com.example.orderservice.web.dto.OrderItemResponse;
-import com.example.orderservice.web.dto.OrderResponse;
-import com.example.orderservice.web.dto.UpdateOrderRequest;
+import com.example.orderservice.service.sorting.OrderSortStrategy;
+import com.example.orderservice.web.dto.*;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -18,17 +17,25 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 @Service
 @Transactional
 public class OrderService {
 
     private final OrderRepository orderRepository;
+    private final Map<String, OrderSortStrategy> sortStrategies;
 
-    public OrderService(OrderRepository orderRepository) {
+    public OrderService(OrderRepository orderRepository, List<OrderSortStrategy> strategies) {
         this.orderRepository = orderRepository;
+        this.sortStrategies = strategies.stream()
+                .collect(Collectors.toMap(OrderSortStrategy::name, Function.identity()));
     }
+
+    // --- CRUD ---
 
     public OrderResponse createOrder(CreateOrderRequest request) {
         Order order = new Order();
@@ -49,8 +56,7 @@ public class OrderService {
 
     @Transactional(readOnly = true)
     public OrderResponse getOrder(UUID id) {
-        Order order = orderRepository.findById(id)
-                .orElseThrow(() -> new OrderNotFoundException(id));
+        Order order = findOrderOrThrow(id);
         return toResponse(order);
     }
 
@@ -60,20 +66,21 @@ public class OrderService {
             sort = "newest";
         }
 
-        Sort sortObj = switch (sort) {
-            case "newest" -> Sort.by(Sort.Direction.DESC, "createdAt");
-            case "oldest" -> Sort.by(Sort.Direction.ASC, "createdAt");
-            case "highest-total" -> Sort.by(Sort.Direction.DESC, "totalAmount");
-            default -> Sort.by(Sort.Direction.DESC, "createdAt");
-        };
+        OrderSortStrategy strategy = sortStrategies.get(sort);
+        Sort sortObj = (strategy != null) ? strategy.sort() : sortStrategies.get("newest").sort();
 
         Page<Order> orders = orderRepository.findAll(PageRequest.of(page, size, sortObj));
         return orders.map(this::toResponse);
     }
 
     public OrderResponse updateOrder(UUID id, UpdateOrderRequest request) {
-        Order order = orderRepository.findById(id)
-                .orElseThrow(() -> new OrderNotFoundException(id));
+        Order order = findOrderOrThrow(id);
+
+        // Items are immutable after payment
+        if (order.getStatus() != OrderStatus.CREATED) {
+            throw new InvalidOrderStateException(
+                    "Cannot modify items: order is " + order.getStatus());
+        }
 
         order.setCustomerName(request.customerName());
         order.getItems().clear();
@@ -92,9 +99,56 @@ public class OrderService {
     }
 
     public void deleteOrder(UUID id) {
-        Order order = orderRepository.findById(id)
-                .orElseThrow(() -> new OrderNotFoundException(id));
+        Order order = findOrderOrThrow(id);
         orderRepository.delete(order);
+    }
+
+    // --- Status transitions ---
+
+    public OrderResponse payOrder(UUID id) {
+        return transition(id, OrderStatus.PAID);
+    }
+
+    public OrderResponse shipOrder(UUID id) {
+        return transition(id, OrderStatus.SHIPPED);
+    }
+
+    public OrderResponse deliverOrder(UUID id) {
+        return transition(id, OrderStatus.DELIVERED);
+    }
+
+    public OrderResponse cancelOrder(UUID id, String reason) {
+        Order order = findOrderOrThrow(id);
+
+        if (!order.getStatus().canTransitionTo(OrderStatus.CANCELLED)) {
+            throw new InvalidOrderStateException(
+                    "Cannot cancel order in status " + order.getStatus());
+        }
+
+        order.setStatus(OrderStatus.CANCELLED);
+        order.setCancelReason(reason);
+        Order saved = orderRepository.save(order);
+        return toResponse(saved);
+    }
+
+    // --- Helpers ---
+
+    private OrderResponse transition(UUID id, OrderStatus target) {
+        Order order = findOrderOrThrow(id);
+
+        if (!order.getStatus().canTransitionTo(target)) {
+            throw new InvalidOrderStateException(
+                    "Cannot transition from " + order.getStatus() + " to " + target);
+        }
+
+        order.setStatus(target);
+        Order saved = orderRepository.save(order);
+        return toResponse(saved);
+    }
+
+    private Order findOrderOrThrow(UUID id) {
+        return orderRepository.findById(id)
+                .orElseThrow(() -> new OrderNotFoundException(id));
     }
 
     private OrderResponse toResponse(Order order) {

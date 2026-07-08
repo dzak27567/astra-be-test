@@ -1,6 +1,7 @@
 package com.example.orderservice.web;
 
 import com.example.orderservice.service.OrderService;
+import com.example.orderservice.web.dto.CancelRequest;
 import com.example.orderservice.web.dto.CreateOrderRequest;
 import com.example.orderservice.web.dto.OrderResponse;
 import com.example.orderservice.web.dto.UpdateOrderRequest;
@@ -52,5 +53,29 @@ public class OrderController {
     public ResponseEntity<Void> deleteOrder(@PathVariable UUID id) {
         orderService.deleteOrder(id);
         return ResponseEntity.noContent().build();
+    }
+
+    // --- Status transitions ---
+
+    @PostMapping("/{id}/pay")
+    public ResponseEntity<OrderResponse> payOrder(@PathVariable UUID id) {
+        return ResponseEntity.ok(orderService.payOrder(id));
+    }
+
+    @PostMapping("/{id}/ship")
+    public ResponseEntity<OrderResponse> shipOrder(@PathVariable UUID id) {
+        return ResponseEntity.ok(orderService.shipOrder(id));
+    }
+
+    @PostMapping("/{id}/deliver")
+    public ResponseEntity<OrderResponse> deliverOrder(@PathVariable UUID id) {
+        return ResponseEntity.ok(orderService.deliverOrder(id));
+    }
+
+    @PostMapping("/{id}/cancel")
+    public ResponseEntity<OrderResponse> cancelOrder(
+            @PathVariable UUID id,
+            @Valid @RequestBody CancelRequest request) {
+        return ResponseEntity.ok(orderService.cancelOrder(id, request.reason()));
     }
 }
