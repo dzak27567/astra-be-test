@@ -1,0 +1,12 @@
+target/
+data/
+.git/
+.idea/
+*.iml
+*.iws
+*.ipr
+HELP.md
+IMPLEMENTATION_PLAN.md
+takehome-tes.md
+takehome-test.pdf
+Order_Service_Postman_Collection.json
