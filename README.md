@@ -123,11 +123,14 @@ All errors follow a consistent structure:
 }
 ```
 
-| Status | Error code       | When                                        |
-|--------|------------------|---------------------------------------------|
-| 400    | VALIDATION_ERROR | Invalid input (empty items, negative qty)   |
-| 404    | NOT_FOUND        | Order ID does not exist                     |
-| 409    | INVALID_STATE    | Illegal transition or immutable items edit  |
+| Status | Error code       | When                                         |
+|--------|------------------|----------------------------------------------|
+| 400    | VALIDATION_ERROR | Invalid input (empty items, negative qty)    |
+| 400    | MALFORMED_REQUEST| Missing or unparseable JSON body             |
+| 400    | INVALID_PARAMETER| Invalid path parameter (e.g., non-UUID id)   |
+| 404    | NOT_FOUND        | Order ID does not exist                      |
+| 409    | INVALID_STATE    | Illegal transition or immutable items edit   |
+| 500    | INTERNAL_ERROR   | Unexpected server error (no stack trace leak)|
 
 ## Design Decisions
 
@@ -154,12 +157,48 @@ All errors follow a consistent structure:
 | **State machine**  | `OrderStatus.canTransitionTo` | Transition validation centralized in the enum, no scattered if/else |
 | **DTO**            | `web/dto/*` records           | Prevents entity exposure, blocks client override of server fields   |
 
+### Optional Assessments Implemented
+
+#### Robustness
+
+The service explicitly rejects the following inputs and states, all demonstrated with tests:
+
+| Rejected condition                     | Response    | Test coverage                           |
+|----------------------------------------|-------------|-----------------------------------------|
+| Empty or missing item list             | 400         | `createOrder_emptyItems`                |
+| Missing/blank customerName             | 400         | `createOrder_missingCustomerName`       |
+| Negative or zero quantity              | 400         | `createOrder_negativeQuantity`          |
+| Negative or zero unitPrice             | 400         | `createOrder_negativeUnitPrice`         |
+| Missing productName in item            | 400         | `createOrder_missingProductName`        |
+| Malformed/empty JSON body              | 400         | `createOrder_malformedJson`             |
+| Invalid UUID path parameter            | 400         | `getOrder_invalidUuid`                  |
+| Unknown order ID (GET/PUT/DELETE/pay)  | 404         | `getOrder_notFound`, etc.               |
+| Ship before PAID                       | 409         | `shipFromCreated`                       |
+| Cancel from DELIVERED/CANCELLED        | 409         | `cancelFromDelivered`, etc.             |
+| Update items after PAID/SHIPPED/etc.   | 409         | `updateAfterPaid`, etc.                 |
+| Cancel without reason                  | 400         | `cancelWithoutReason`                   |
+| Client-supplied orderId/status/total   | Ignored     | `createOrder_serverIgnoresClientOrderId`|
+
+Stack traces are never exposed to the client — a generic fallback handler returns `500 INTERNAL_ERROR` without implementation details.
+
+#### Deployment
+
+A multi-stage `Dockerfile` is provided:
+
+```bash
+# Build and run with Docker
+docker build -t order-service .
+docker run -p 8080:8080 order-service
+```
+
+- **Stage 1 (build):** `eclipse-temurin:21-jdk` with Maven wrapper — dependencies cached in a separate layer for fast rebuilds.
+- **Stage 2 (run):** `eclipse-temurin:21-jre` — minimal runtime image.
+- `.dockerignore` excludes build artifacts, data directory, and IDE files.
+
 ### Scope deliberately omitted
 
 - **Authentication/Authorization** — not specified in the requirements.
 - **Pagination metadata links** (HATEOAS) — Spring's `Page` response provides `totalElements`, `totalPages`, `number`, `size` which is sufficient.
-- **Swagger/OpenAPI** — curl examples in this README serve the same purpose for the assessment scope.
-- **Dockerfile** — would be straightforward (`eclipse-temurin:21-jre` + `COPY target/*.jar app.jar`) but not required.
 
 ### What I would improve given more time
 
@@ -168,16 +207,19 @@ All errors follow a consistent structure:
 - **Separate "update customerName" from "update items"** — the spec hints items are immutable after payment but other fields remain editable. Currently both are in the same endpoint.
 - **Query-based sorting for `oldest-unpaid`** — currently sorts by status enum ordinal + createdAt, but a proper implementation would filter to `status = CREATED` orders first.
 - **Integration test with Testcontainers + Postgres** for production-like database testing.
+- **Docker Compose** with a separate Postgres container for production-like persistence.
+- **Health check endpoint** (`/actuator/health`) for container orchestration readiness probes.
 
 ## Test Suite
 
-47 tests total, all passing:
+81 tests total, all passing:
 
 - **OrderServiceTest** (24 tests): unit tests with Mockito — CRUD success/failure, all legal/illegal transitions, item immutability after payment.
 - **OrderControllerIntegrationTest** (22 tests): full HTTP-level tests with MockMvc — request validation, error responses, status codes, full order lifecycle.
+- **RobustnessTest** (34 tests): comprehensive rejection scenario tests organized in `@Nested` groups — input validation, missing resources, illegal transitions, item immutability, cancel validation, server-computed field protection.
 - **OrderServiceApplicationTests** (1 test): Spring context loads.
 
 ```bash
 ./mvnw test
-# Tests run: 47, Failures: 0, Errors: 0, Skipped: 0
+# Tests run: 81, Failures: 0, Errors: 0, Skipped: 0
 ```
